@@ -24,13 +24,25 @@
     <depends>com.intellij.modules.platform</depends>
 
     <actions>
+        <!-- 生成单个方法/整个类的注释 -->
         <action id="EmmyLuaAnnotationGenerator.Generate"
                 class="com.emmylua.generator.EmmyLuaAnnotationAction"
                 text="Generate EmmyLua Annotation"
-                description="为当前Lua方法生成EmmyLua注释">
+                description="为当前Lua方法或class生成EmmyLua注释">
             <add-to-group group-id="EditorPopupMenu" anchor="first"/>
             <add-to-group group-id="GenerateGroup" anchor="first"/>
             <keyboard-shortcut keymap="$default" first-keystroke="alt E"/>
         </action>
+        
+        <!-- 示例：新增一个清除注释的菜单 -->
+        <!--
+        <action id="EmmyLuaAnnotationGenerator.Remove"
+                class="com.emmylua.generator.RemoveAnnotationAction"
+                text="Remove EmmyLua Annotation"
+                description="移除当前方法的EmmyLua注释">
+            <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="EmmyLuaAnnotationGenerator.Generate"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="alt shift E"/>
+        </action>
+        -->
     </actions>
 </idea-plugin>
