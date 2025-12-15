@@ -39,6 +39,25 @@ object PloopParser {
     }
     
     /**
+     * 从 class 定义行向下查找 inherit 语句，获取父类名
+     */
+    fun findInheritClass(documentText: String, classLineNumber: Int): String? {
+        val lines = documentText.lines()
+        // 在 class 行后的10行内查找 inherit
+        for (i in (classLineNumber + 1) until minOf(classLineNumber + 10, lines.size)) {
+            val line = lines[i].trim()
+            INHERIT_PATTERN.find(line)?.let {
+                return it.groupValues[1]
+            }
+            // 如果遇到 function 定义，停止查找
+            if (line.startsWith("function ") || line.startsWith("property ")) {
+                break
+            }
+        }
+        return null
+    }
+    
+    /**
      * 扫描 class 内的所有方法（从 class 定义行开始向下扫描）
      */
     fun findAllMethodsInClass(documentText: String, classLineNumber: Int): List<LuaMethodInfo> {
