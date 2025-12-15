@@ -2,6 +2,11 @@ plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm") version "1.9.21"
     id("org.jetbrains.intellij") version "1.16.1"
+    application
+}
+
+application {
+    mainClass.set("com.emmylua.generator.MainKt")
 }
 
 group = "com.emmylua"
@@ -12,6 +17,7 @@ repositories {
 }
 
 dependencies {
+    implementation("org.jetbrains.kotlin:kotlin-stdlib")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.1")
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.10.1")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.10.1")
