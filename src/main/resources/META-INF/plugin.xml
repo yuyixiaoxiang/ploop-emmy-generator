@@ -1,0 +1,36 @@
+<idea-plugin>
+    <id>com.emmylua.annotation-generator</id>
+    <name>EmmyLua Annotation Generator for PLoop</name>
+    <version>1.0.0</version>
+    <vendor email="your@email.com" url="https://github.com/yourname">YourName</vendor>
+
+    <description><![CDATA[
+    自动为PLoop框架的Lua方法生成EmmyLua注释。<br>
+    <br>
+    功能:<br>
+    - 右键点击Lua方法，选择"Generate EmmyLua Annotation"<br>
+    - 自动识别class名称和方法参数<br>
+    - 生成标准的EmmyLua注释格式<br>
+    ]]></description>
+
+    <change-notes><![CDATA[
+    <b>1.0.0</b><br>
+    - 初始版本<br>
+    - 支持PLoop框架的class方法注释生成<br>
+    ]]></change-notes>
+
+    <idea-version since-build="241" until-build="253.*"/>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <actions>
+        <action id="EmmyLuaAnnotationGenerator.Generate"
+                class="com.emmylua.generator.EmmyLuaAnnotationAction"
+                text="Generate EmmyLua Annotation"
+                description="为当前Lua方法生成EmmyLua注释">
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <add-to-group group-id="GenerateGroup" anchor="first"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="alt E"/>
+        </action>
+    </actions>
+</idea-plugin>
