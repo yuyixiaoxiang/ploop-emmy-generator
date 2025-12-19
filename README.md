@@ -16,7 +16,7 @@
 ### 1. 项目风格（推荐）
 ```lua
 ---@class hero_info_panel
----@field public RefreshUI fun(self:hero_info_panel,tab:number) @方法描述
+---@field public RefreshUI fun(self:hero_info_panel,tab:number)
 ---@param self hero_info_panel
 ---@param tab number
 function RefreshUI(self, tab)
@@ -32,7 +32,7 @@ function RefreshUI(self, tab)
 ### 3. 完整版本
 ```lua
 ---@class hero_info_panel
----@field public RefreshUI fun(self:hero_info_panel,tab:number):void @方法描述
+---@field public RefreshUI fun(self:hero_info_panel,tab:number):void
 ---@param self hero_info_panel 
 ---@param tab number @tab
 function RefreshUI(self, tab)

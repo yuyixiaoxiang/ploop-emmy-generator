@@ -27,11 +27,17 @@
         <!-- 生成单个方法/整个类的注释 -->
         <action id="EmmyLuaAnnotationGenerator.Generate"
                 class="com.emmylua.generator.EmmyLuaAnnotationAction"
-                text="Generate EmmyLua Annotation"
+                text="[LUA]Generate EmmyLua Annotation"
                 description="为当前Lua方法或class生成EmmyLua注释">
             <add-to-group group-id="EditorPopupMenu" anchor="first"/>
-            <add-to-group group-id="GenerateGroup" anchor="first"/>
-            <keyboard-shortcut keymap="$default" first-keystroke="alt E"/>
+        </action>
+
+        <!-- 生成单个方法/整个类的注释 -->
+        <action id="EmmyLuaAnnotationGenerator.RequirePath"
+                class="com.emmylua.generator.LuaRequirePathAction"
+                text="[LUA]Get Lua Require Path"
+                description="获取指定lua文件的路径">
+            <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="EmmyLuaAnnotationGenerator.Generate"/>
         </action>
         
         <!-- 示例：新增一个清除注释的菜单 -->

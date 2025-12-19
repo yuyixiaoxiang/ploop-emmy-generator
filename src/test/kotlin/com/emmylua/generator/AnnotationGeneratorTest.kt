@@ -19,10 +19,9 @@ class AnnotationGeneratorTest {
         val result = AnnotationGenerator.generate(methodInfo, classInfo, null, "        ")
         
         assertTrue(result.contains("---@class TestClass"))
-        assertTrue(result.contains("---@field public OnShow fun() @方法描述"))
+        assertTrue(result.contains("---@field public OnShow fun(self:TestClass)"))
         assertTrue(result.contains("---@param self TestClass"))
-        // @field should not contain self
-        assertFalse(result.contains("fun(self:"))
+
     }
 
     @Test
@@ -39,7 +38,7 @@ class AnnotationGeneratorTest {
         val result = AnnotationGenerator.generate(methodInfo, classInfo, null, "")
         
         assertTrue(result.contains("---@class HeroModule"))
-        assertTrue(result.contains("---@field public SetData fun(heroId:number,callback:function) @方法描述"))
+        assertTrue(result.contains("---@field public SetData fun(self:HeroModule,heroId:number,callback:function)"))
         assertTrue(result.contains("---@param self HeroModule"))
         assertTrue(result.contains("---@param heroId number"))
         assertTrue(result.contains("---@param callback function"))
@@ -59,7 +58,7 @@ class AnnotationGeneratorTest {
         val result = AnnotationGenerator.generate(methodInfo, classInfo, null, "")
         
         assertTrue(result.contains("---@class Utils"))
-//        assertTrue(result.contains("---@field public StaticMethod fun(data:table,count:number) @方法描述"))
+//        assertTrue(result.contains("---@field public StaticMethod fun(data:table,count:number)"))
 //        assertTrue(result.contains("---@param data table"))
         assertTrue(result.contains("---@param count number"))
         assertFalse(result.contains("---@param self"))
@@ -79,7 +78,7 @@ class AnnotationGeneratorTest {
         val result = AnnotationGenerator.generate(methodInfo, classInfo, null, "")
         
         assertTrue(result.contains("---@class Module"))
-        assertTrue(result.contains("---@field public Init fun() @方法描述"))
+        assertTrue(result.contains("---@field public Init fun()"))
         assertFalse(result.contains("---@param"))
     }
 
@@ -96,7 +95,7 @@ class AnnotationGeneratorTest {
         
         val result = AnnotationGenerator.generate(methodInfo, classInfo, "number", "")
         
-        assertTrue(result.contains("---@field public GetValue fun():number @方法描述"))
+        assertTrue(result.contains("---@field public GetValue fun(self:DataClass):number"))
     }
 
     @Test
@@ -146,7 +145,7 @@ class AnnotationGeneratorTest {
         val result = AnnotationGenerator.generate(methodInfo, classInfo, null, "")
         
         // Check @field doesn't have self
-        assertTrue(result.contains("fun(userId:number,userName:string,isActive:boolean,itemList:table,configData:table)"))
+        assertTrue(result.contains("fun(self:ComplexClass,userId:number,userName:string,isActive:boolean,itemList:table,configData:table)"))
         
         // Check all @params
         assertTrue(result.contains("---@param self ComplexClass"))
@@ -172,7 +171,7 @@ class AnnotationGeneratorTest {
         
         val expected = """
         ---@class hero_info_panel
-        ---@field public RefreshUI fun(tab:any) @方法描述
+        ---@field public RefreshUI fun(tab:any)
         ---@param self hero_info_panel
         ---@param tab any
         """.trimIndent()

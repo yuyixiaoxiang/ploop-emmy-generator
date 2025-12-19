@@ -1,5 +1,7 @@
 package com.emmylua.generator
 
+import com.intellij.internal.statistic.config.StatisticsStringUtil.toLowerCase
+
 data class LuaMethodInfo(
     val className: String?,
     val methodName: String,
@@ -264,20 +266,21 @@ object PloopParser {
     /**
      * 推断参数类型（基于命名约定）
      */
-    fun inferParamType(paramName: String): String {
+    fun inferParamType(paramName: String,className: String = ""): String {
+        val paramsStr = toLowerCase(paramName)
         return when {
-            paramName == "self" -> "self" // 特殊标记，后续替换为类名
-            paramName.endsWith("Id") || paramName.endsWith("_id") -> "number"
-            paramName.endsWith("Name") || paramName.endsWith("_name") -> "string"
-            paramName.endsWith("List") || paramName.endsWith("_list") -> "table"
-            paramName.endsWith("Dict") || paramName.endsWith("_dict") -> "table"
-            paramName.endsWith("Cfg") || paramName.endsWith("_cfg") -> "table"
-            paramName.endsWith("Data") || paramName.endsWith("_data") -> "table"
-            paramName.startsWith("is") || paramName.startsWith("has") || paramName.startsWith("can") -> "boolean"
-            paramName == "index" || paramName == "idx" || paramName == "count" || paramName == "num" -> "number"
-            paramName == "callback" || paramName == "cb" || paramName == "func" -> "function"
-            paramName == "params" || paramName == "args" || paramName == "options" -> "table"
-            paramName == "event" || paramName == "_" -> "string|number"
+            paramsStr == "self" -> className // 特殊标记，后续替换为类名
+            paramsStr.endsWith("id") -> "number"
+            paramsStr.endsWith("name") -> "string"
+            paramsStr.endsWith("list")-> "table"
+            paramsStr.endsWith("dict") -> "table"
+            paramsStr.endsWith("cfg")  -> "table"
+            paramsStr.endsWith("data")  -> "table"
+            paramsStr.startsWith("is") || paramsStr.startsWith("has") || paramsStr.startsWith("can") -> "boolean"
+            paramsStr == "index" || paramsStr == "idx" || paramsStr == "count" || paramsStr == "num" -> "number"
+            paramsStr == "callback" || paramsStr == "cb" || paramsStr == "func" || paramsStr.endsWith("callback")  -> "function"
+            paramsStr.contains("params")  || paramsStr.contains("args") ||paramsStr.contains("options")  -> "table"
+            paramsStr.endsWith("event") -> "string|number"
             else -> "any"
         }
     }

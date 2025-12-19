@@ -82,7 +82,7 @@ Module "Game.View.test_panel" (function(_ENV)
         inherit "ViewBase"
         
         ---@class test_panel
-        ---@field public OnShow fun(self:test_panel,params:table) @方法描述
+        ---@field public OnShow fun(self:test_panel,params:table)
         ---@param self test_panel
         ---@param params table
         function OnShow(self, params)
