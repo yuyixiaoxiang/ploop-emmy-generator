@@ -132,13 +132,14 @@ object PloopParser {
     private val SELF_METHOD_PATTERN = Regex("""^\s*self\.(\w+)\s*=\s*function\s*\(([^)]*)\)""")
 
     /**
-     * 从文档内容中解析class信息
+     * 从文档内容中解析class信息 检测class和 基类
+     * @param currentLine Int 从0开始
      */
     fun parseClassInfo(documentText: String, currentLine: Int): LuaClassInfo? {
         val lines = documentText.lines()
         var className: String? = null
         var parentClass: String? = null
-        
+        var parentClassLine = 0
         // 从当前行向上查找class定义
         for (i in currentLine downTo 0) {
             if (i >= lines.size) continue
@@ -148,6 +149,7 @@ object PloopParser {
             if (className == null) {
                 CLASS_PATTERN.find(line)?.let {
                     className = it.groupValues[1]
+                    parentClassLine = i
                 }
             }
             
@@ -163,7 +165,20 @@ object PloopParser {
                 break
             }
         }
-        
+
+        //再次查找一次基类
+        if(className != null && parentClass == null) {
+            for(i in parentClassLine.until(lines.size)) {
+                val line = lines[i]
+                if (!line.trim().startsWith("end)")){
+                    INHERIT_PATTERN.find(line)?.let {
+                        parentClass = it.groupValues[1]
+                    }
+                }
+                if(parentClass != null) break
+            }
+        }
+
         return className?.let { LuaClassInfo(it, parentClass) }
     }
 

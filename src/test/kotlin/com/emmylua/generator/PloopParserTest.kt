@@ -70,6 +70,13 @@ class PloopParserTest {
     fun `test parseClassInfo - finds class from method line`() {
         val doc = """
 Module "Game.Module.HomeSceneModule" (function(_ENV)
+    class "HomeSceneModule2" (function(_ENV)
+        inherit "ModuleBase"
+        
+        function OnShow(self)
+        end
+    end)
+    
     class "HomeSceneModule" (function(_ENV)
         inherit "ModuleBase"
         
@@ -79,8 +86,12 @@ Module "Game.Module.HomeSceneModule" (function(_ENV)
 end)
         """.trimIndent()
         
-        val result = PloopParser.parseClassInfo(doc, 5) // OnShow line
+        val result = PloopParser.parseClassInfo(doc, 12) // OnShow line
         assertNotNull(result)
+        assertEquals("HomeSceneModule", result?.className)
+
+        val result2 = PloopParser.parseClassInfo(doc, 7) // OnShow line
+        assertNotNull(result2)
         assertEquals("HomeSceneModule", result?.className)
     }
 
