@@ -13,6 +13,7 @@ class EmmyLuaAnnotationAction : AnAction() {
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
         val document = editor.document
         val caretModel = editor.caretModel
+        val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
         
         // 右键菜单选择动作时，AnActionEvent.inputEvent 通常是“点击菜单项”的事件，
         // 坐标不是 editor 的，所以不能用来算行号。
@@ -62,7 +63,7 @@ class EmmyLuaAnnotationAction : AnAction() {
 
         // 检查是否是 class 定义行
         if (PloopParser.isClassDefinitionLine(currentLineText)) {
-            AnnotationGenerator.generateAnnotationsForClass(e, document, currentLine, currentLineText)
+            AnnotationGenerator.generateAnnotationsForClass(e, document, currentLine, currentLineText, virtualFile)
             return
         }
 

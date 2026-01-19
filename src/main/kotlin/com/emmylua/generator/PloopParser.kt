@@ -293,14 +293,20 @@ object PloopParser {
      */
     fun findInheritClass(documentText: String, classLineNumber: Int): String? {
         val lines = documentText.lines()
-        // 在 class 行后的10行内查找 inherit
-        for (i in (classLineNumber + 1) until minOf(classLineNumber + 10, lines.size)) {
-            val line = lines[i].trim()
-            INHERIT_PATTERN.find(line)?.let {
+        // 在 class 行后的较大范围内查找 inherit（某些文件会先写 property 再 inherit）
+        for (i in (classLineNumber + 1) until minOf(classLineNumber + 60, lines.size)) {
+            val trimmed = lines[i].trim()
+            INHERIT_PATTERN.find(trimmed)?.let {
                 return it.groupValues[1]
             }
-            // 如果遇到 function 定义，停止查找
-            if (line.startsWith("function ") || line.startsWith("property ")) {
+
+            // 遇到方法定义就停止（inherit 一般在方法前）
+            if (trimmed.startsWith("function ") || trimmed.startsWith("local function") || METHOD_PATTERN.containsMatchIn(lines[i])) {
+                break
+            }
+
+            // 遇到 class/enum/module 结束也停止
+            if (trimmed == "end)" || trimmed.startsWith("end)") || trimmed == "end") {
                 break
             }
         }
