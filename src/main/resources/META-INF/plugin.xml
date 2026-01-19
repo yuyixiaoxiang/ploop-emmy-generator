@@ -23,6 +23,10 @@
 
     <depends>com.intellij.modules.platform</depends>
 
+    <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity implementation="com.emmylua.generator.EditorMouseLineTracker"/>
+    </extensions>
+
     <actions>
         <!-- 生成单个方法/整个类的注释 -->
         <action id="EmmyLuaAnnotationGenerator.Generate"

@@ -50,6 +50,91 @@ object AnnotationGenerator {
         return annotation
     }
 
+    fun getAnnotationForEnum(enumStartLine: Int, documentText: String): String {
+        val lines = documentText.lines()
+        if (enumStartLine !in lines.indices) return ""
+
+        val enumInfo = PloopParser.parseEnumInfo(documentText, enumStartLine) ?: return ""
+        if (enumInfo.entries.isEmpty()) return ""
+
+        val enumLineText = lines[enumStartLine]
+        val indent = enumLineText.takeWhile { it.isWhitespace() }
+
+        val sb = StringBuilder()
+        sb.appendLine("$indent---@class ${enumInfo.enumName}")
+
+        // 生成字段类型：优先根据 value 推断，否则默认 number（PLoop 常见用法）
+        enumInfo.entries.forEach { entry ->
+            val type = entry.valueExpr?.let { PloopParser.inferTypeFromExpression(it) } ?: "number"
+            sb.appendLine("$indent---@field ${entry.name} $type")
+        }
+
+        return sb.toString().trimEnd('\n')
+    }
+
+    fun generateAnnotationForEnum(e: AnActionEvent, document: Document, enumStartLine: Int) {
+        val project = e.project ?: return
+        val documentText = document.text
+
+        val annotation = getAnnotationForEnum(enumStartLine, documentText)
+        if (annotation.isBlank()) {
+            Messages.showInfoMessage(project, "未能解析到枚举定义或枚举项。", "提示")
+            return
+        }
+
+        val existingRange = findExistingAnnotationRange(document, enumStartLine)
+        WriteCommandAction.runWriteCommandAction(project) {
+            if (existingRange != null) {
+                document.replaceString(existingRange.first, existingRange.second, annotation + "\n")
+            } else {
+                val lineStartOffset = document.getLineStartOffset(enumStartLine)
+                document.insertString(lineStartOffset, annotation + "\n")
+            }
+        }
+    }
+
+    fun getAnnotationForProperty(propertyStartLine: Int, documentText: String): String {
+        val lines = documentText.lines()
+        if (propertyStartLine !in lines.indices) return ""
+
+        val propertyInfo = PloopParser.parsePropertyInfo(documentText, propertyStartLine) ?: return ""
+        val propertyLineText = lines[propertyStartLine]
+        val indent = propertyLineText.takeWhile { it.isWhitespace() }
+
+        val className = PloopParser.parseClassInfo(documentText, propertyStartLine)?.className ?: "UnknownClass"
+
+        val auto = "_auto_annotation_"
+        val sb = StringBuilder()
+        sb.appendLine("$indent---@class $className $auto")
+        sb.appendLine("$indent---@field public ${propertyInfo.propertyName} ${propertyInfo.luaType} $auto")
+        propertyInfo.fieldName?.let { backing ->
+            sb.appendLine("$indent---@field private $backing ${propertyInfo.luaType} $auto")
+        }
+
+        return sb.toString().trimEnd('\n')
+    }
+
+    fun generateAnnotationForProperty(e: AnActionEvent, document: Document, propertyStartLine: Int) {
+        val project = e.project ?: return
+        val documentText = document.text
+
+        val annotation = getAnnotationForProperty(propertyStartLine, documentText)
+        if (annotation.isBlank()) {
+            Messages.showInfoMessage(project, "未能解析到属性定义。", "提示")
+            return
+        }
+
+        val existingRange = findExistingAnnotationRange(document, propertyStartLine)
+        WriteCommandAction.runWriteCommandAction(project) {
+            if (existingRange != null) {
+                document.replaceString(existingRange.first, existingRange.second, annotation + "\n")
+            } else {
+                val lineStartOffset = document.getLineStartOffset(propertyStartLine)
+                document.insertString(lineStartOffset, annotation + "\n")
+            }
+        }
+    }
+
 
     /**
      * 生成 为方法正成注释
@@ -88,54 +173,79 @@ object AnnotationGenerator {
         val className = PloopParser.parseClassNameFromLine(classLineText) ?: return
         LuaClassInfo(className, null)
 
-        // 找到所有方法
+        // 找到所有方法 / 属性
         val methods = PloopParser.findAllMethodsInClass(document.text, classLine)
+        val properties = PloopParser.findAllPropertiesInClass(document.text, classLine)
 
-        if (methods.isEmpty()) {
-            Messages.showInfoMessage(project, "未找到任何方法。", "提示")
+        if (methods.isEmpty() && properties.isEmpty()) {
+            Messages.showInfoMessage(project, "未找到任何方法或属性。", "提示")
             return
         }
 
-        var generatedCount = 0
-        var refreshedCount = 0
+        var generatedMethods = 0
+        var refreshedMethods = 0
+        var generatedProps = 0
+        var refreshedProps = 0
+
+        data class Target(val kind: String, val name: String, val lineNumber: Int)
+        val targets = mutableListOf<Target>()
+        methods.forEach { targets.add(Target("method", it.methodName, it.lineNumber)) }
+        properties.forEach { targets.add(Target("property", it.propertyName, it.lineNumber)) }
 
         // 从后往前处理（避免行号偏移问题）
         WriteCommandAction.runWriteCommandAction(project) {
-            for (method in methods.sortedByDescending { it.lineNumber }) {
-                // 每次循环重新获取当前文档状态，因为前面的操作可能改变了行号
+            for (t in targets.sortedByDescending { it.lineNumber }) {
                 val currentLines = document.text.lines()
 
-                // 找到该方法当前的实际行号（通过方法名匹配）
-                val actualMethodLine = findMethodLine(currentLines, method.methodName, method.lineNumber)
-                if (actualMethodLine == -1) continue
+                val actualLine = when (t.kind) {
+                    "method" -> findMethodLine(currentLines, t.name, t.lineNumber)
+                    "property" -> findPropertyLine(currentLines, t.name, t.lineNumber)
+                    else -> -1
+                }
+                if (actualLine == -1) continue
 
-                val methodLineText = currentLines.getOrNull(actualMethodLine) ?: continue
+                val methodLineText = currentLines.getOrNull(actualLine)
+                val annotation = when (t.kind) {
+                    "method" -> if (methodLineText != null) {
+                        getAnnotationForMethod(methodLineText, actualLine, document.text)
+                    } else {
+                        ""
+                    }
+                    "property" -> getAnnotationForProperty(actualLine, document.text)
+                    else -> ""
+                }
+                if (annotation.isBlank()) continue
 
-                val annotation = getAnnotationForMethod(methodLineText, actualMethodLine, document.text)
-
-                // 检查是否已有注释
-                val existingRange = findExistingAnnotationRange(document, actualMethodLine)
-
+                val existingRange = findExistingAnnotationRange(document, actualLine)
                 if (existingRange != null) {
-                    // 刷新已有注释
                     document.replaceString(existingRange.first, existingRange.second, annotation + "\n")
-                    refreshedCount++
+                    when (t.kind) {
+                        "method" -> refreshedMethods++
+                        "property" -> refreshedProps++
+                    }
                 } else {
-                    // 插入新注释
-                    val insertOffset = document.getLineStartOffset(actualMethodLine)
+                    val insertOffset = document.getLineStartOffset(actualLine)
                     document.insertString(insertOffset, annotation + "\n")
-                    generatedCount++
+                    when (t.kind) {
+                        "method" -> generatedMethods++
+                        "property" -> generatedProps++
+                    }
                 }
             }
         }
 
-        val msg = when {
-            generatedCount > 0 && refreshedCount > 0 -> "新增 $generatedCount 个，刷新 $refreshedCount 个方法注释。"
-            generatedCount > 0 -> "已为 $generatedCount 个方法生成注释。"
-            refreshedCount > 0 -> "已刷新 $refreshedCount 个方法注释。"
-            else -> "没有方法需要处理。"
+        val msg = buildString {
+            if (generatedProps > 0 || refreshedProps > 0) {
+                append("属性: 新增 $generatedProps，刷新 $refreshedProps。 ")
+            }
+            if (generatedMethods > 0 || refreshedMethods > 0) {
+                append("方法: 新增 $generatedMethods，刷新 $refreshedMethods。")
+            }
+            if (isBlank()) {
+                append("没有方法/属性需要处理。")
+            }
         }
-        Messages.showInfoMessage(project, msg, "完成")
+        Messages.showInfoMessage(project, msg.trim(), "完成")
     }
 
     /**
@@ -156,6 +266,23 @@ object AnnotationGenerator {
         return -1
     }
 
+    fun findPropertyLine(lines: List<String>, propertyName: String, hintLine: Int): Int {
+        val pattern = Regex("""\bproperty\s+[\"']$propertyName[\"']""")
+
+        if (hintLine < lines.size && pattern.containsMatchIn(lines[hintLine])) {
+            return hintLine
+        }
+
+        // 插入注释会导致行号向下偏移，优先向下找
+        for (offset in 0..80) {
+            val checkLine = hintLine + offset
+            if (checkLine < lines.size && pattern.containsMatchIn(lines[checkLine])) {
+                return checkLine
+            }
+        }
+        return -1
+    }
+
     /**
      * 查找已存在的注释范围（返回起始和结束offset）
      */
@@ -165,8 +292,8 @@ object AnnotationGenerator {
         var annotationEndLine = -1
         var annotationStartLine = -1
 
-        // 从方法行向上查找注释块
-        for (i in (methodLine - 1) downTo maxOf(0, methodLine - 10)) {
+        // 从方法行向上查找注释块（枚举/方法参数可能很多，预留更大的扫描范围）
+        for (i in (methodLine - 1) downTo maxOf(0, methodLine - 200)) {
             val line = lines[i].trim()
 
             // 如果是注释行
@@ -178,7 +305,13 @@ object AnnotationGenerator {
             }
             // 如果是普通注释 (-- 但不是 ---@)
             else if (line.startsWith("--") && !line.startsWith("---")) {
-                // 跳过普通注释，继续向上找
+                // 如果是“注释掉的代码行”，当作边界（避免把上一个 property 的注释误认为当前的）
+                val codeLike = Regex("""^--\s*(property|function|class|enum|module|end)\b""", RegexOption.IGNORE_CASE)
+                if (codeLike.containsMatchIn(line)) {
+                    break
+                }
+
+                // 否则跳过普通注释，继续向上找（允许保留说明性注释）
                 continue
             }
             // 如果遇到空行，继续向上查找
