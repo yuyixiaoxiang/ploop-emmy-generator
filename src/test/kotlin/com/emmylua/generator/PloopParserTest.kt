@@ -127,18 +127,96 @@ end)
     }
 
     @Test
+    fun `test findAllMethodsInClass - should not stop at end in callback`() {
+        val doc = """
+Module "Game.Module.TestModule" (function(_ENV)
+    class "TestModule" (function(_ENV)
+        function Method1(self)
+            Foo(function()
+            end);
+        end
+
+        function Method2(self)
+        end
+    end)
+end)
+        """.trimIndent()
+
+        val methods = PloopParser.findAllMethodsInClass(doc, 1) // class line
+        assertEquals(listOf("Method1", "Method2"), methods.map { it.methodName })
+    }
+
+    @Test
     fun `test inferParamType`() {
-        assertEquals("number", PloopParser.inferParamType("heroId"))
-        assertEquals("number", PloopParser.inferParamType("user_id"))
+        // id 默认 number|string（缺少方法体上下文时）
+        assertEquals("number|string", PloopParser.inferParamType("heroId"))
+        assertEquals("number|string", PloopParser.inferParamType("user_id"))
+
         assertEquals("string", PloopParser.inferParamType("userName"))
         assertEquals("table", PloopParser.inferParamType("dataList"))
         assertEquals("table", PloopParser.inferParamType("configDict"))
+        assertEquals("table", PloopParser.inferParamType("heroes"))
         assertEquals("boolean", PloopParser.inferParamType("isActive"))
         assertEquals("boolean", PloopParser.inferParamType("hasItem"))
         assertEquals("function", PloopParser.inferParamType("callback"))
         assertEquals("number", PloopParser.inferParamType("index"))
+        assertEquals("number", PloopParser.inferParamType("posX"))
+        assertEquals("number", PloopParser.inferParamType("cnt"))
+        assertEquals("number", PloopParser.inferParamType("width"))
+        assertEquals("number", PloopParser.inferParamType("Height"))
+        assertEquals("number", PloopParser.inferParamType("w"))
+        assertEquals("number", PloopParser.inferParamType("h"))
+        assertEquals("string", PloopParser.inferParamType("s"))
+        assertEquals("string", PloopParser.inferParamType("Text"))
+        assertEquals("string", PloopParser.inferParamType("uId2"))
+        assertEquals("string", PloopParser.inferParamType("GUID"))
+        assertEquals("string", PloopParser.inferParamType("uuid"))
         assertEquals("table", PloopParser.inferParamType("params"))
         assertEquals("any", PloopParser.inferParamType("something"))
+    }
+
+    @Test
+    fun `test inferParamType - id should prefer string when compared to empty string`() {
+        val doc = """
+Module "Game.Module.TestModule" (function(_ENV)
+    class "TestModule" (function(_ENV)
+        function Foo(self, uId)
+            if uId == "" then
+                return
+            end
+        end
+    end)
+end)
+        """.trimIndent()
+
+        // function Foo 所在行：2 (0-based)
+        assertEquals("string", PloopParser.inferParamType("uId", "", doc, 2))
+    }
+
+    @Test
+    fun `test inferParamType - id should prefer number when used in math`() {
+        val doc = """
+Module "Game.Module.TestModule" (function(_ENV)
+    class "TestModule" (function(_ENV)
+        function Foo(self, heroId)
+            if heroId > 0 then
+                heroId = heroId + 1
+            end
+        end
+    end)
+end)
+        """.trimIndent()
+
+        // function Foo 所在行：2 (0-based)
+        assertEquals("number", PloopParser.inferParamType("heroId", "", doc, 2))
+    }
+
+    @Test
+    fun `test inferReturnTypeFromMethodName`() {
+        assertEquals("boolean", PloopParser.inferReturnTypeFromMethodName("IsOpen"))
+        assertEquals("boolean", PloopParser.inferReturnTypeFromMethodName("hasItem"))
+        assertEquals("any", PloopParser.inferReturnTypeFromMethodName("GetData"))
+        assertNull(PloopParser.inferReturnTypeFromMethodName("OpenPanel"))
     }
 
     @Test

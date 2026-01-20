@@ -143,6 +143,40 @@ object PloopParser {
         return null
     }
 
+    private fun isClassEndLine(rawLine: String, baseIndentLen: Int): Boolean {
+        val indentLen = rawLine.takeWhile { it.isWhitespace() }.length
+        if (indentLen > baseIndentLen) return false
+
+        val trimmed = rawLine.trim()
+        // class / module closure: `end)` (optionally followed by a comment)
+        return trimmed == "end)" || trimmed.matches(Regex("""^end\)\s*--.*$"""))
+    }
+
+    /**
+     * 从 class 定义行向下查找 inherit 语句，返回父类名与行号
+     */
+    fun findInheritClassWithLine(documentText: String, classLineNumber: Int): Pair<String, Int>? {
+        val lines = documentText.lines()
+        val baseIndentLen = lines.getOrNull(classLineNumber)?.takeWhile { it.isWhitespace() }?.length ?: 0
+
+        for (i in (classLineNumber + 1) until minOf(classLineNumber + 60, lines.size)) {
+            val trimmed = lines[i].trim()
+            INHERIT_PATTERN.find(trimmed)?.let {
+                return it.groupValues[1] to i
+            }
+
+            if (trimmed.startsWith("function ") || trimmed.startsWith("local function") || METHOD_PATTERN.containsMatchIn(lines[i])) {
+                break
+            }
+
+            // 注意：不要用 startsWith("end)")，否则会把 `end);`（回调闭包结束）误判为 class 结束
+            if (isClassEndLine(lines[i], baseIndentLen) || (trimmed == "end" && i + 1 < lines.size && isClassEndLine(lines[i + 1], baseIndentLen))) {
+                break
+            }
+        }
+        return null
+    }
+
     fun parsePropertyInfo(documentText: String, propertyStartLine: Int): LuaPropertyInfo? {
         val lines = documentText.lines()
         if (propertyStartLine !in lines.indices) return null
@@ -293,6 +327,8 @@ object PloopParser {
      */
     fun findInheritClass(documentText: String, classLineNumber: Int): String? {
         val lines = documentText.lines()
+        val baseIndentLen = lines.getOrNull(classLineNumber)?.takeWhile { it.isWhitespace() }?.length ?: 0
+
         // 在 class 行后的较大范围内查找 inherit（某些文件会先写 property 再 inherit）
         for (i in (classLineNumber + 1) until minOf(classLineNumber + 60, lines.size)) {
             val trimmed = lines[i].trim()
@@ -306,7 +342,7 @@ object PloopParser {
             }
 
             // 遇到 class/enum/module 结束也停止
-            if (trimmed == "end)" || trimmed.startsWith("end)") || trimmed == "end") {
+            if (isClassEndLine(lines[i], baseIndentLen) || (trimmed == "end" && i + 1 < lines.size && isClassEndLine(lines[i + 1], baseIndentLen))) {
                 break
             }
         }
@@ -361,21 +397,22 @@ object PloopParser {
 
     private fun findClassEndLine(lines: List<String>, classLineNumber: Int): Int {
         var classEndLine = lines.size
+        val baseIndentLen = lines.getOrNull(classLineNumber)?.takeWhile { it.isWhitespace() }?.length ?: 0
 
         for (i in (classLineNumber + 1) until lines.size) {
             val trimmedLine = lines[i].trim()
-            // 检测 class 结束：end) 或 end)xxx
-            if (trimmedLine == "end)" || trimmedLine.startsWith("end)")) {
+
+            // 检测 class 结束：只允许 `end)`（可跟注释），且缩进不能比 class 行更深。
+            // 注意：不要把 `end);` / `end),` 等回调闭包的结束误判为 class 结束。
+            if (isClassEndLine(lines[i], baseIndentLen)) {
                 classEndLine = i
                 break
             }
+
             // 检测 Module 结束：end + 下一行 end)
-            if (trimmedLine == "end" && i + 1 < lines.size) {
-                val nextLine = lines[i + 1].trim()
-                if (nextLine == "end)" || nextLine.startsWith("end)")) {
-                    classEndLine = i
-                    break
-                }
+            if (trimmedLine == "end" && i + 1 < lines.size && isClassEndLine(lines[i + 1], baseIndentLen)) {
+                classEndLine = i
+                break
             }
         }
 
@@ -517,11 +554,16 @@ object PloopParser {
      */
     fun analyzeReturnType(documentText: String, methodStartLine: Int): String? {
         val lines = documentText.lines()
+        if (methodStartLine !in lines.indices) return null
+
+        val baseIndentLen = lines[methodStartLine].takeWhile { it.isWhitespace() }.length
 
         for (i in methodStartLine until lines.size) {
             val line = lines[i]
+            val trimmed = line.trim()
+            val indentLen = line.takeWhile { it.isWhitespace() }.length
 
-            // 检测是否有return语句
+            // 检测是否有 return 语句（非常轻量级推断）
             if (line.contains("return ")) {
                 val returnMatch = Regex("""return\s+(.+)""").find(line)
                 returnMatch?.let {
@@ -530,13 +572,91 @@ object PloopParser {
                 }
             }
 
-            // 检测end关键字
-            if (line.trim() == "end" || line.trim().startsWith("end ") || line.trim().startsWith("end;")) {
+            // 只在缩进回到 method 级别时，认为遇到了方法结束
+            if (indentLen <= baseIndentLen && (trimmed == "end" || trimmed.startsWith("end ") || trimmed.startsWith("end;"))) {
                 break
             }
         }
 
         return null
+    }
+
+    fun inferReturnTypeFromMethodName(methodName: String): String? {
+        val m = methodName.trim()
+        if (m.isBlank()) return null
+
+        return when {
+            m.startsWith("is", ignoreCase = true) || m.startsWith("has", ignoreCase = true) -> "boolean"
+            m.startsWith("get", ignoreCase = true) -> "any"
+            else -> null
+        }
+    }
+
+    private fun inferIdTypeFromMethodBody(documentText: String, methodStartLine: Int, paramLower: String): String {
+        val lines = documentText.lines()
+        if (methodStartLine !in lines.indices) return "number|string"
+
+        val baseIndentLen = lines[methodStartLine].takeWhile { it.isWhitespace() }.length
+        val sb = StringBuilder()
+
+        // 取出“看起来属于该方法”的文本片段（基于缩进，避免被 if/for 的 end 截断）
+        for (i in (methodStartLine + 1) until lines.size) {
+            val line = lines[i]
+            val trimmed = line.trim()
+            val indentLen = line.takeWhile { it.isWhitespace() }.length
+
+            if (indentLen <= baseIndentLen && (trimmed == "end" || trimmed.startsWith("end ") || trimmed.startsWith("end;"))) {
+                break
+            }
+            sb.appendLine(line)
+        }
+
+        val body = sb.toString().lowercase()
+        val p = Regex.escape(paramLower)
+
+        fun has(re: String) = Regex(re).containsMatchIn(body)
+
+        val numHint =
+            has("""\btonumber\s*\(\s*\b$p\b\s*\)""") ||
+                has("""\bmath\.[a-z_]+\s*\(\s*\b$p\b""") ||
+                has("""\b$p\b\s*[+\-*/%]""") ||
+                has("""[+\-*/%]\s*\b$p\b""") ||
+                has("""\b$p\b\s*[<>]=?\s*\d""") ||
+                has("""\d\s*[<>]=?\s*\b$p\b""")
+
+        // uId / uid / guid / uuid 这类更常见是 string（例如会与 "" 比较，或作为 key）
+        val nameLeansString = paramLower.contains("uid") || paramLower.contains("guid") || paramLower.contains("uuid")
+
+        val strHint =
+            nameLeansString ||
+                has("""\btostring\s*\(\s*\b$p\b\s*\)""") ||
+                has("""\bstring\.[a-z_]+\s*\(\s*\b$p\b""") ||
+                has("""\.\.\s*\b$p\b""") ||
+                has("""\b$p\b\s*\.\.""") ||
+                has("""\b$p\b\s*[~=]=\s*["']""") ||
+                has("""["']\s*[~=]=\s*\b$p\b""")
+
+        return when {
+            numHint && strHint -> "number|string"
+            numHint -> "number"
+            strHint -> "string"
+            else -> "number|string"
+        }
+    }
+
+    private fun isIdLike(paramLower: String): Boolean {
+        // “ID” 类型：尽量覆盖常见写法，同时避免把 list/dict 等集合名字误当成单个 id。
+        if (paramLower == "id") return true
+
+        // 覆盖 uId/uID/uId2、guid、uuid 等（即使不以 id 结尾）
+        if (paramLower.contains("uid") || paramLower.contains("guid") || paramLower.contains("uuid")) return true
+
+        // 常规 id：xxxId / xxx_id / id_xxx
+        if (paramLower.endsWith("id")) return true
+        if (paramLower.contains("_id")) return true
+        if (paramLower.contains("id_")) return true
+
+        return false
     }
 
     /**
@@ -555,24 +675,66 @@ object PloopParser {
     }
 
     /**
-     * 推断参数类型（基于命名约定）
+     * 推断参数类型（基于命名约定；不区分大小写）
      */
-    fun inferParamType(paramName: String,className: String = ""): String {
-        val paramsStr = toLowerCase(paramName)
-        return when {
-            paramsStr == "self" -> className // 特殊标记，后续替换为类名
-            paramsStr.endsWith("id") -> "number"
-            paramsStr.endsWith("name") -> "string"
-            paramsStr.endsWith("list")-> "table"
-            paramsStr.endsWith("dict") -> "table"
-            paramsStr.endsWith("cfg")  -> "table"
-            paramsStr.endsWith("data")  -> "table"
-            paramsStr.startsWith("is") || paramsStr.startsWith("has") || paramsStr.startsWith("can") -> "boolean"
-            paramsStr == "index" || paramsStr == "idx" || paramsStr == "count" || paramsStr == "num" -> "number"
-            paramsStr == "callback" || paramsStr == "cb" || paramsStr == "func" || paramsStr.endsWith("callback")  -> "function"
-            paramsStr.contains("params")  || paramsStr.contains("args") ||paramsStr.contains("options")  -> "table"
-            paramsStr.endsWith("event") -> "string|number"
-            else -> "any"
+    fun inferParamType(
+        paramName: String,
+        className: String = "",
+        documentText: String? = null,
+        methodStartLine: Int? = null
+    ): String {
+        val p = toLowerCase(paramName).trim()
+
+        if (p == "self") return className
+
+        // boolean
+        if (p.startsWith("is") || p.startsWith("has") || p.startsWith("can")) return "boolean"
+
+        // callback / function
+        if (p == "callback" || p == "cb" || p == "func" || p.endsWith("callback")) return "function"
+
+        // table (集合/字典)
+        if (
+            p.contains("params") || p.contains("args") || p.contains("options") ||
+                p.contains("list") || p.contains("array") || p.contains("dic") || p.contains("dict") || p.contains("table") ||
+                p.endsWith("cfg") || p.endsWith("data")
+        ) {
+            return "table"
         }
+        // xxxS / xxxs：复数按 table
+        if (p.length > 1 && p.endsWith("s") && p != "is" && p != "has") {
+            return "table"
+        }
+
+        // number
+        val numberTokens = listOf(
+            "x", "y", "z",
+            "w", "h", "width", "height",
+            "num", "count", "cnt", "len", "size", "idx", "index"
+        )
+        if (numberTokens.any { token -> p == token || p.endsWith(token) || p.contains("_${token}") || p.contains("${token}_") }) {
+            return "number"
+        }
+
+        // string
+        if (p == "s") return "string"
+        if (p.contains("str") || p.contains("text") || p.contains("txt")) return "string"
+        if (p.endsWith("name")) return "string"
+
+        // id: number|string；尽量根据方法体判断。
+        // uId/guid/uuid 这类默认更偏 string。
+        if (isIdLike(p)) {
+            if (documentText != null && methodStartLine != null) {
+                return inferIdTypeFromMethodBody(documentText, methodStartLine, p)
+            }
+            if (p.contains("uid") || p.contains("guid") || p.contains("uuid")) {
+                return "string"
+            }
+            return "number|string"
+        }
+
+        if (p.endsWith("event")) return "string|number"
+
+        return "any"
     }
 }

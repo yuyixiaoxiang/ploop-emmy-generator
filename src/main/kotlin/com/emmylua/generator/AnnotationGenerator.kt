@@ -203,6 +203,65 @@ object AnnotationGenerator {
         return DocBlock(text = mergedText, startLine = startLine, endLine = endLine)
     }
 
+    private fun ensureViewBaseOnShowParamsDecl(document: Document, methodLine: Int) {
+        val lines = document.text.lines()
+        if (methodLine !in lines.indices) return
+
+        val lineText = lines[methodLine]
+        val methodInfo = PloopParser.parseMethodAtLine(lineText, methodLine) ?: return
+        if (!methodInfo.methodName.equals("OnShow", ignoreCase = true)) return
+
+        val hasParams = methodInfo.params.any { it.equals("params", ignoreCase = true) }
+        if (!hasParams) return
+
+        val classInfo = PloopParser.parseClassInfo(document.text, methodLine) ?: return
+        if (classInfo.parentClass?.equals("ViewBase", ignoreCase = true) != true) return
+
+        val className = classInfo.className
+        val paramsClass = "${className}_params"
+
+        val methodIndent = lineText.takeWhile { it.isWhitespace() }
+        val baseIndentLen = methodIndent.length
+
+        // 尝试用方法体第一条语句的缩进作为 bodyIndent；否则用 +4 空格
+        var bodyIndent = methodIndent + "    "
+        run {
+            val max = minOf(lines.lastIndex, methodLine + 5)
+            for (i in (methodLine + 1)..max) {
+                val l = lines[i]
+                if (l.isBlank()) continue
+                val ind = l.takeWhile { it.isWhitespace() }
+                if (ind.length > baseIndentLen) {
+                    bodyIndent = ind
+                }
+                break
+            }
+        }
+
+        val expected = "${bodyIndent}---@class $paramsClass"
+
+        // 在该方法体范围内（按缩进回到 method 级别的 end 判断）查重
+        for (i in (methodLine + 1) until lines.size) {
+            val l = lines[i]
+            val trimmed = l.trim()
+            val indentLen = l.takeWhile { it.isWhitespace() }.length
+
+            if (trimmed == expected.trim()) return
+
+            if (indentLen <= baseIndentLen && (trimmed == "end" || trimmed.startsWith("end ") || trimmed.startsWith("end;"))) {
+                break
+            }
+        }
+
+        // 插入到 function 下一行（如果下一行已存在内容，则作为新的首行插入）
+        val insertOffset = if (methodLine + 1 >= document.lineCount) {
+            document.textLength
+        } else {
+            document.getLineStartOffset(methodLine + 1)
+        }
+        document.insertString(insertOffset, expected + "\n")
+    }
+
     fun getAnnotationForMethod(
         currentLineText: String,
         currentLine: Int,
@@ -233,8 +292,23 @@ object AnnotationGenerator {
             mergedParamTypes["self"] = className
         }
 
+        // 特殊处理：inherit "ViewBase" 的 OnShow(params)
+        // 1) 强制 params 的类型为 <ClassName>_params
+        if (
+            classInfo != null &&
+            classInfo.parentClass?.equals("ViewBase", ignoreCase = true) == true &&
+            methodInfo.methodName.equals("OnShow", ignoreCase = true)
+        ) {
+            val paramsKey = methodInfo.params.firstOrNull { it.equals("params", ignoreCase = true) }
+            if (paramsKey != null) {
+                mergedParamTypes[paramsKey] = "${className}_params"
+            }
+        }
+
         // 分析返回类型（如果旧注释里手动写了返回类型，优先用旧的）
-        val returnType = hints.returnType ?: PloopParser.analyzeReturnType(documentText, currentLine)
+        val returnType = hints.returnType
+            ?: PloopParser.analyzeReturnType(documentText, currentLine)
+            ?: PloopParser.inferReturnTypeFromMethodName(methodInfo.methodName)
 
         // ---@class ClassName
         sb.appendLine("$indent---@class $className")
@@ -242,7 +316,8 @@ object AnnotationGenerator {
 
         // ---@field public MethodName fun(param:type)
         val fieldParams = paramsForField.joinToString(",") { param ->
-            val type = mergedParamTypes[param] ?: PloopParser.inferParamType(param, className)
+            val type = mergedParamTypes[param]
+                ?: PloopParser.inferParamType(param, className, documentText, currentLine)
             "$param:$type"
         }
         val fieldReturn = if (returnType != null && returnType != "void" && returnType != "nil") ":$returnType" else ""
@@ -252,7 +327,8 @@ object AnnotationGenerator {
 
         // ---@param 注释（包含 self）
         methodInfo.params.forEach { param ->
-            val paramType = mergedParamTypes[param] ?: PloopParser.inferParamType(param, className)
+            val paramType = mergedParamTypes[param]
+                ?: PloopParser.inferParamType(param, className, documentText, currentLine)
             sb.appendLine("$indent---@param $param $paramType")
         }
 
@@ -330,15 +406,29 @@ object AnnotationGenerator {
             ?: propertyInfo.fieldName?.let { existingFieldDesc[it] })
             ?.let { " $it" }
 
-        val publicType = existingFieldTypes[propertyInfo.propertyName] ?: propertyInfo.luaType
+        // 复用旧类型：
+        // - public 优先用旧注释里的类型。
+        // - 若 public 旧类型缺失或为 any，则尝试用 backing field 的旧类型（更“具体”），避免刷新后 public=any、private=number 这种漂移。
+        val backingName = propertyInfo.fieldName
+        val oldPublicType = existingFieldTypes[propertyInfo.propertyName]
+        val oldBackingType = backingName?.let { existingFieldTypes[it] }
+        val publicType = when {
+            oldPublicType == null -> oldBackingType ?: propertyInfo.luaType
+            oldPublicType == "any" && !oldBackingType.isNullOrBlank() && oldBackingType != "any" -> oldBackingType
+            else -> oldPublicType
+        }
+
         if (docSuffix != null) {
             sb.appendLine("$indent---@field public ${propertyInfo.propertyName} $publicType$docSuffix")
         } else {
             sb.appendLine("$indent---@field public ${propertyInfo.propertyName} $publicType $auto")
         }
 
-        propertyInfo.fieldName?.let { backing ->
-            val backingType = existingFieldTypes[backing] ?: propertyInfo.luaType
+        // backing:
+        // - 同名时优先用旧 backing 类型
+        // - 若 backing 改名（旧注释里没有该 backing），则复用 publicType
+        backingName?.let { backing ->
+            val backingType = existingFieldTypes[backing] ?: publicType
             if (docSuffix != null) {
                 sb.appendLine("$indent---@field private $backing $backingType$docSuffix")
             } else {
@@ -397,27 +487,25 @@ object AnnotationGenerator {
         val existingRange = findExistingAnnotationRange(document, currentLine)
         val existingText = existingRange?.let { document.getText(TextRange(it.first, it.second)) }
 
-        val anchorLine = existingRange?.let { document.getLineNumber(it.first) } ?: currentLine
-        val docBlock = findLeadingTripleDashDocBlock(documentText.lines(), anchorLine)
+        // 方法注释：不再“吸收/移动”上方的 `--- 说明`（保持原位，不合并到 @field）
+        val annotation = getAnnotationForMethod(currentLineText, currentLine, documentText, existingText, null)
 
-        val annotation = getAnnotationForMethod(currentLineText, currentLine, documentText, existingText, docBlock?.text)
+        val startOffset = existingRange?.first ?: document.getLineStartOffset(currentLine)
+        val endOffset = existingRange?.second ?: startOffset
 
-        var startOffset = existingRange?.first ?: document.getLineStartOffset(currentLine)
-        var endOffset = existingRange?.second ?: startOffset
-
-        docBlock?.let {
-            val docStartOffset = document.getLineStartOffset(it.startLine)
-            val docEndOffset = document.getLineEndOffset(it.endLine) + 1
-            if (docEndOffset <= startOffset) {
-                startOffset = docStartOffset
-                if (existingRange == null) {
-                    endOffset = docEndOffset
-                }
-            }
-        }
+        // 记录方法名（写入注释后行号可能发生偏移）
+        val methodName = PloopParser.parseMethodAtLine(currentLineText, currentLine)?.methodName
 
         WriteCommandAction.runWriteCommandAction(project) {
             document.replaceString(startOffset, endOffset, annotation + "\n")
+
+            // 特殊处理：ViewBase.OnShow(params) 插入方法体内的 params class 声明（不重复插入）
+            if (methodName != null) {
+                val newLine = findMethodLine(document.text.lines(), methodName, currentLine)
+                if (newLine != -1) {
+                    ensureViewBaseOnShowParamsDecl(document, newLine)
+                }
+            }
         }
     }
 
@@ -548,6 +636,34 @@ object AnnotationGenerator {
         }
 
         // 从后往前处理（避免行号偏移问题）
+        fun isClassEndLine(rawLine: String, baseIndentLen: Int): Boolean {
+            val indentLen = rawLine.takeWhile { it.isWhitespace() }.length
+            if (indentLen > baseIndentLen) return false
+
+            val trimmed = rawLine.trim()
+            return trimmed == "end)" || trimmed.matches(Regex("""^end\)\s*--.*$"""))
+        }
+
+        fun findClassEndLine(lines: List<String>, classLineNumber: Int): Int {
+            var classEndLine = lines.size
+            val baseIndentLen = lines.getOrNull(classLineNumber)?.takeWhile { it.isWhitespace() }?.length ?: 0
+
+            for (i in (classLineNumber + 1) until lines.size) {
+                val trimmedLine = lines[i].trim()
+
+                if (isClassEndLine(lines[i], baseIndentLen)) {
+                    classEndLine = i
+                    break
+                }
+
+                if (trimmedLine == "end" && i + 1 < lines.size && isClassEndLine(lines[i + 1], baseIndentLen)) {
+                    classEndLine = i
+                    break
+                }
+            }
+            return classEndLine
+        }
+
         WriteCommandAction.runWriteCommandAction(project) {
             for (t in targets.sortedByDescending { it.lineNumber }) {
                 val currentLines = document.text.lines()
@@ -566,12 +682,14 @@ object AnnotationGenerator {
 
                 val anchorLine = existingRange?.let { document.getLineNumber(it.first) } ?: actualLine
                 val docBlock = when (t.kind) {
-                    "method", "property" -> findLeadingTripleDashDocBlock(currentLines, anchorLine)
+                    // property 仍支持把 `--- 说明` 合并进字段注释
+                    "property" -> findLeadingTripleDashDocBlock(currentLines, anchorLine)
+                    // method 不再处理 `--- 说明`
                     else -> null
                 }
 
                 val annotation = when (t.kind) {
-                    "method" -> if (lineText != null) getAnnotationForMethod(lineText, actualLine, document.text, existingText, docBlock?.text) else ""
+                    "method" -> if (lineText != null) getAnnotationForMethod(lineText, actualLine, document.text, existingText, null) else ""
                     "property" -> getAnnotationForProperty(actualLine, document.text, existingText, docBlock?.text)
                     "classHeader" -> if (lineText != null) getAnnotationForClassHeader(actualLine, lineText, document.text, virtualFile) else ""
                     else -> ""
@@ -593,10 +711,87 @@ object AnnotationGenerator {
                 }
 
                 document.replaceString(startOffset, endOffset, annotation + "\n")
+
+                // 特殊处理：ViewBase.OnShow(params) 插入方法体内的 params class 声明（不重复插入）
+                if (t.kind == "method") {
+                    val newLine = findMethodLine(document.text.lines(), t.name, actualLine)
+                    if (newLine != -1) {
+                        ensureViewBaseOnShowParamsDecl(document, newLine)
+                    }
+                }
+
                 when (t.kind) {
                     "method" -> if (existingRange != null) refreshedMethods++ else generatedMethods++
                     "property" -> if (existingRange != null) refreshedProps++ else generatedProps++
                     "classHeader" -> if (existingRange != null) refreshedHeader++ else generatedHeader++
+                }
+            }
+
+            // 如果 class 继承了基类，插入 super 的类型提示（仅当不存在时）
+            val inheritInfo = PloopParser.findInheritClassWithLine(document.text, classLine)
+            inheritInfo?.let { (parentName, inheritLine) ->
+                val lines = document.text.lines()
+                if (inheritLine in lines.indices) {
+                    val indent = lines[inheritLine].takeWhile { it.isWhitespace() }
+                    val typeLine = "${indent}---@type $parentName"
+                    val superLine = "${indent}local super = super --'hack-code-remove'"
+
+                    val lookEnd = minOf(lines.lastIndex, inheritLine + 5)
+                    val scope = lines.subList(inheritLine + 1, lookEnd + 1)
+
+                    var foundTypeLineIndex: Int? = null
+                    for (idx in (inheritLine + 1)..lookEnd) {
+                        val t = lines[idx].trim()
+                        if (t.startsWith("---@type ")) {
+                            foundTypeLineIndex = idx
+                            break
+                        }
+                    }
+
+                    val hasType = foundTypeLineIndex != null && lines[foundTypeLineIndex!!].trim() == typeLine.trim()
+                    val hasSuper = scope.any { it.trim().matches(Regex("""^local\s+super\s*=\s*super(\b.*)?$""")) }
+
+                    // 如果已有 @type 但类型不一致，先替换为新的父类类型
+                    if (!hasType && foundTypeLineIndex != null) {
+                        val lineStart = document.getLineStartOffset(foundTypeLineIndex!!)
+                        val lineEnd = document.getLineEndOffset(foundTypeLineIndex!!)
+                        document.replaceString(lineStart, lineEnd, typeLine)
+                    }
+
+                    if (!hasType || !hasSuper) {
+                        val insertLines = buildList {
+                            if (!hasType && foundTypeLineIndex == null) add(typeLine)
+                            if (!hasSuper) add(superLine)
+                        }
+                        if (insertLines.isNotEmpty()) {
+                            val insertOffset = document.getLineStartOffset(minOf(inheritLine + 1, document.lineCount - 1))
+                            document.insertString(insertOffset, insertLines.joinToString("\n", postfix = "\n"))
+                        }
+                    }
+                }
+            }
+
+            // 如果当前 class 没有 inherit，则移除之前生成的 super 类型提示
+            if (inheritInfo == null) {
+                val lines = document.text.lines()
+                val classEndLine = findClassEndLine(lines, classLine).coerceAtMost(lines.lastIndex)
+
+                var i = classLine + 1
+                while (i <= classEndLine && i < lines.size) {
+                    val t = lines[i].trim()
+                    if (t.startsWith("---@type ")) {
+                        val next = if (i + 1 < lines.size) lines[i + 1].trim() else ""
+                        val isSuper = next == "local super = super --'hack-code-remove'"
+                        if (isSuper) {
+                            val startOffset = document.getLineStartOffset(i)
+                            val endOffset = document.getLineEndOffset(i + 1) + 1
+                            document.deleteString(startOffset, endOffset)
+                            // 文档变化，重新同步并回退一行
+                            i--
+                            continue
+                        }
+                    }
+                    i++
                 }
             }
         }

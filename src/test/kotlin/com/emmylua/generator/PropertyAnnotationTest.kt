@@ -67,6 +67,54 @@ class PropertyAnnotationTest {
     }
 
     @Test
+    fun `refresh property should reuse previous public type when backing field renamed`() {
+        val lua = """
+            class "LoginModule" (function(_ENV)
+            property "ServerConfig" { field = "__serverConfig1", type = System.Table, default = {}, set = false }
+            end)
+        """.trimIndent()
+
+        val existing = """
+            ---@class LoginModule _auto_annotation_
+            ---@field public ServerConfig table _auto_annotation_
+            ---@field private __serverConfig table _auto_annotation_
+        """.trimIndent()
+
+        val annotation = AnnotationGenerator.getAnnotationForProperty(propertyStartLine = 1, documentText = lua, existingAnnotationText = existing)
+        val expected = """
+            ---@class LoginModule _auto_annotation_
+            ---@field public ServerConfig table _auto_annotation_
+            ---@field private __serverConfig1 table _auto_annotation_
+        """.trimIndent()
+
+        assertEquals(expected, annotation)
+    }
+
+    @Test
+    fun `refresh property should prefer old backing type when public is any`() {
+        val lua = """
+            class "LoginModule" (function(_ENV)
+            property "Params3" { field = "__params", set = false }
+            end)
+        """.trimIndent()
+
+        val existing = """
+            ---@class LoginModule _auto_annotation_
+            ---@field public Params3 any _auto_annotation_
+            ---@field private __params number _auto_annotation_
+        """.trimIndent()
+
+        val annotation = AnnotationGenerator.getAnnotationForProperty(propertyStartLine = 1, documentText = lua, existingAnnotationText = existing)
+        val expected = """
+            ---@class LoginModule _auto_annotation_
+            ---@field public Params3 number _auto_annotation_
+            ---@field private __params number _auto_annotation_
+        """.trimIndent()
+
+        assertEquals(expected, annotation)
+    }
+
+    @Test
     fun `find property definition when caret inside block`() {
         val lua = """
             property "FreeTimes" { field = "__freeTimes", type = System.Integer, default = 0, set = false, get = function(self)
