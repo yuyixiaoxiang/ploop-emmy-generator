@@ -5,18 +5,30 @@
     <vendor email="your@email.com" url="https://github.com/yourname">YourName</vendor>
 
     <description><![CDATA[
-    自动为PLoop框架的Lua方法生成EmmyLua注释。<br>
+    面向 <b>PLoop</b> 项目的 Lua 开发效率工具：一键生成 EmmyLua 注释、快速生成/插入 require、并提供常用的“懒加载注册”辅助动作。<br>
     <br>
-    功能:<br>
-    - 右键点击Lua方法，选择"Generate EmmyLua Annotation"<br>
-    - 自动识别class名称和方法参数<br>
-    - 生成标准的EmmyLua注释格式<br>
+    <b>主要功能</b><br>
+    <ul>
+      <li><b>Generate EmmyLua Annotation</b>：在编辑器中对 Lua 方法/类生成 EmmyLua 注释（参数/返回值/类型提示等）。</li>
+      <li><b>AutoRequirePath</b>：选中类型名/模块名（或光标停在单词上），自动解析对应 Lua 文件的 require 路径；若当前文件尚未 require，则自动在文件顶部插入，并将 require(...) 同时复制到剪贴板（避免重复插入）。</li>
+      <li><b>获取本Lua的RequirePath</b>：显示当前 Lua 文件的 require 相对路径，便于复制粘贴。</li>
+      <li><b>注册当前界面类 / Module类 / Data类</b>：将当前类写入对应的 <code>_LAZY_REQUIRE</code> 表，并在需要时同步更新 <code>init.lua</code>（去重）。</li>
+    </ul>
+    <br>
+    <b>使用方式</b><br>
+    在 Lua 编辑器中右键打开菜单（Editor Popup Menu），即可看到以上动作。<br>
+    <br>
+    <b>路径解析说明</b><br>
+    require 路径优先基于工程内的 LuaRoot（常见目录如 <code>Assets/client-code/LuaFramework/Lua</code> 或 <code>LuaFramework/Lua</code>）计算；若无法定位 LuaRoot，会尝试从路径中截取 <code>/LuaFramework/Lua/</code> 之后的部分。<br>
     ]]></description>
 
     <change-notes><![CDATA[
     <b>1.0.0</b><br>
-    - 初始版本<br>
-    - 支持PLoop框架的class方法注释生成<br>
+    <ul>
+      <li>初始版本：PLoop Lua 的 EmmyLua 注释生成。</li>
+      <li>新增：AutoRequirePath / 获取本Lua的RequirePath 等路径辅助动作。</li>
+      <li>新增：View / Module / Data 的懒加载注册与 init.lua 同步写入（去重）。</li>
+    </ul>
     ]]></change-notes>
 
     <idea-version since-build="241" until-build="253.*"/>
@@ -39,9 +51,16 @@
         <!-- 生成单个方法/整个类的注释 -->
         <action id="EmmyLuaAnnotationGenerator.RequirePath"
                 class="com.emmylua.generator.LuaRequirePathAction"
-                text="[LUA]Get Lua Require Path"
+                text="[LUA]AutoRequirePath"
                 description="获取指定lua文件的路径">
             <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="EmmyLuaAnnotationGenerator.Generate"/>
+        </action>
+
+        <action id="EmmyLuaAnnotationGenerator.CurrentFileRequirePath"
+                class="com.emmylua.generator.GetCurrentLuaFileRequirePathAction"
+                text="[LUA]获取本Lua的RequirePath"
+                description="获取当前Lua文件的require相对路径（光标在任意位置均可使用）">
+            <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="EmmyLuaAnnotationGenerator.RequirePath"/>
         </action>
 
         <action id="EmmyLuaAnnotationGenerator.RegisterViewClass"

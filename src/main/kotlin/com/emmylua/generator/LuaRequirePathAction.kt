@@ -44,7 +44,7 @@ class LuaRequirePathAction : AnAction() {
         val requirePath = findRequirePathByTypeName(project, luaRoot, typeName)
         if (requirePath == null) {
             val hint = luaRoot?.toString()?.let { "\nLuaRoot: $it" } ?: ""
-            Messages.showInfoMessage(project, "未找到 $typeName 的定义文件。$hint", "Get Lua Require Path")
+            Messages.showInfoMessage(project, "未找到 $typeName 的定义文件。$hint", "AutoRequirePath")
             return
         }
 
@@ -55,14 +55,14 @@ class LuaRequirePathAction : AnAction() {
         val currentRequirePath = currentFile?.let { computeRequirePath(it, luaRoot) }
         if (currentRequirePath != null && currentRequirePath.equals(requirePath, ignoreCase = true)) {
             copyToClipboard(requireLine)
-            Messages.showInfoMessage(project, "类型定义就在当前文件：$requirePath（无需 require，已复制到剪贴板）", "Get Lua Require Path")
+            Messages.showInfoMessage(project, "类型定义就在当前文件：$requirePath（无需 require，已复制到剪贴板）", "AutoRequirePath")
             return
         }
 
         // 去重：已经 require 过就不再插入
         if (hasRequire(document.text, requirePath)) {
             copyToClipboard(requireLine)
-            Messages.showInfoMessage(project, "已存在：$requireLine（已复制到剪贴板）", "Get Lua Require Path")
+            Messages.showInfoMessage(project, "已存在：$requireLine（已复制到剪贴板）", "AutoRequirePath")
             return
         }
 
@@ -72,7 +72,7 @@ class LuaRequirePathAction : AnAction() {
         }
 
         copyToClipboard(requireLine)
-        Messages.showInfoMessage(project, "已添加：$requireLine（已复制到剪贴板）", "Get Lua Require Path")
+        Messages.showInfoMessage(project, "已添加：$requireLine（已复制到剪贴板）", "AutoRequirePath")
     }
 
     override fun update(e: AnActionEvent) {
@@ -184,7 +184,7 @@ class LuaRequirePathAction : AnAction() {
         val chosenIndex = Messages.showChooseDialog(
             project,
             "找到多个候选文件，请选择 $typeName 的 require 路径：",
-            "Get Lua Require Path",
+            "AutoRequirePath",
             Messages.getQuestionIcon(),
             requirePaths.toTypedArray(),
             requirePaths.first()
