@@ -43,6 +43,27 @@
                 description="获取指定lua文件的路径">
             <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="EmmyLuaAnnotationGenerator.Generate"/>
         </action>
+
+        <action id="EmmyLuaAnnotationGenerator.RegisterViewClass"
+                class="com.emmylua.generator.RegisterViewClassAction"
+                text="[LUA]注册当前界面类"
+                description="将继承自ViewBase的界面类注册到GameView._LAZY_REQUIRE表中（不重复）">
+            <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="EmmyLuaAnnotationGenerator.RequirePath"/>
+        </action>
+
+        <action id="EmmyLuaAnnotationGenerator.RegisterModuleClass"
+                class="com.emmylua.generator.RegisterModuleClassAction"
+                text="[LUA]注册当前Module类"
+                description="将当前Module类注册到GameModule._LAZY_REQUIRE，并同步写入GameModule/init.lua（不重复）">
+            <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="EmmyLuaAnnotationGenerator.RegisterViewClass"/>
+        </action>
+
+        <action id="EmmyLuaAnnotationGenerator.RegisterDataClass"
+                class="com.emmylua.generator.RegisterDataClassAction"
+                text="[LUA]注册当前Data类"
+                description="将当前Data类注册到GameData._LAZY_REQUIRE，并同步写入GameData/init.lua（不重复）">
+            <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="EmmyLuaAnnotationGenerator.RegisterModuleClass"/>
+        </action>
         
         <!-- 示例：新增一个清除注释的菜单 -->
         <!--
