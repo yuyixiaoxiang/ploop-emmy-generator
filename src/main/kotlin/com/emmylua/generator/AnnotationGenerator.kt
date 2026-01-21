@@ -9,6 +9,65 @@ import com.intellij.openapi.vfs.VirtualFile
 
 object AnnotationGenerator {
 
+    // 临时开关：是否生成
+    //   ---@type ParentClass
+    //   local super = super --'hack-code-remove'
+    // 这类 "super" 类型提示。
+    private const val ENABLE_SUPER_TYPE_HINT = false
+
+    data class GenerationStats(
+        var generatedMethods: Int = 0,
+        var refreshedMethods: Int = 0,
+        var generatedProps: Int = 0,
+        var refreshedProps: Int = 0,
+        var generatedEnums: Int = 0,
+        var refreshedEnums: Int = 0,
+        var generatedHeader: Int = 0,
+        var refreshedHeader: Int = 0,
+        var filesProcessed: Int = 0,
+        var filesSkipped: Int = 0
+    ) {
+        fun mergeFrom(other: GenerationStats) {
+            generatedMethods += other.generatedMethods
+            refreshedMethods += other.refreshedMethods
+            generatedProps += other.generatedProps
+            refreshedProps += other.refreshedProps
+            generatedEnums += other.generatedEnums
+            refreshedEnums += other.refreshedEnums
+            generatedHeader += other.generatedHeader
+            refreshedHeader += other.refreshedHeader
+            filesProcessed += other.filesProcessed
+            filesSkipped += other.filesSkipped
+        }
+
+        fun isEmptyWork(): Boolean =
+            generatedMethods == 0 && refreshedMethods == 0 &&
+                generatedProps == 0 && refreshedProps == 0 &&
+                generatedEnums == 0 && refreshedEnums == 0 &&
+                generatedHeader == 0 && refreshedHeader == 0
+
+        fun toSummaryMessage(): String {
+            val msg = buildString {
+                if (generatedHeader > 0 || refreshedHeader > 0) {
+                    append("类注释: 新增 $generatedHeader，刷新 $refreshedHeader。 ")
+                }
+                if (generatedEnums > 0 || refreshedEnums > 0) {
+                    append("枚举: 新增 $generatedEnums，刷新 $refreshedEnums。 ")
+                }
+                if (generatedProps > 0 || refreshedProps > 0) {
+                    append("属性: 新增 $generatedProps，刷新 $refreshedProps。 ")
+                }
+                if (generatedMethods > 0 || refreshedMethods > 0) {
+                    append("方法: 新增 $generatedMethods，刷新 $refreshedMethods。")
+                }
+                if (isBlank()) {
+                    append("没有需要处理的内容。")
+                }
+            }
+            return msg.trim()
+        }
+    }
+
     private data class ExistingMethodTypeHints(
         val paramTypes: Map<String, String> = emptyMap(),
         val returnType: String? = null,
@@ -588,31 +647,22 @@ object AnnotationGenerator {
     /**
      * 为 class 内的所有方法/属性生成/刷新注释，并在 class 行生成头部注释
      */
-    fun generateAnnotationsForClass(
-        e: AnActionEvent,
+    internal fun generateAnnotationsForClassInWriteContext(
+        project: com.intellij.openapi.project.Project,
         document: Document,
         classLine: Int,
         classLineText: String,
         virtualFile: VirtualFile?
-    ) {
-        val project = e.project ?: return
+    ): GenerationStats {
+        val stats = GenerationStats()
 
         // 解析类名
-        val className = PloopParser.parseClassNameFromLine(classLineText) ?: return
+        val className = PloopParser.parseClassNameFromLine(classLineText) ?: return stats
         LuaClassInfo(className, null)
 
         // 找到所有方法 / 属性
         val methods = PloopParser.findAllMethodsInClass(document.text, classLine)
         val properties = PloopParser.findAllPropertiesInClass(document.text, classLine)
-
-        // class header 也算一种输出，所以不能因为 methods/props 为空就直接 return
-
-        var generatedMethods = 0
-        var refreshedMethods = 0
-        var generatedProps = 0
-        var refreshedProps = 0
-        var refreshedHeader = 0
-        var generatedHeader = 0
 
         data class Target(val kind: String, val name: String, val lineNumber: Int)
         val targets = mutableListOf<Target>()
@@ -664,71 +714,94 @@ object AnnotationGenerator {
             return classEndLine
         }
 
-        WriteCommandAction.runWriteCommandAction(project) {
-            for (t in targets.sortedByDescending { it.lineNumber }) {
-                val currentLines = document.text.lines()
+        for (t in targets.sortedByDescending { it.lineNumber }) {
+            val currentLines = document.text.lines()
 
-                val actualLine = when (t.kind) {
-                    "method" -> findMethodLine(currentLines, t.name, t.lineNumber)
-                    "property" -> findPropertyLine(currentLines, t.name, t.lineNumber)
-                    "classHeader" -> findClassLine(currentLines, t.name, t.lineNumber)
-                    else -> -1
-                }
-                if (actualLine == -1) continue
+            val actualLine = when (t.kind) {
+                "method" -> findMethodLine(currentLines, t.name, t.lineNumber)
+                "property" -> findPropertyLine(currentLines, t.name, t.lineNumber)
+                "classHeader" -> findClassLine(currentLines, t.name, t.lineNumber)
+                else -> -1
+            }
+            if (actualLine == -1) continue
 
-                val lineText = currentLines.getOrNull(actualLine)
-                val existingRange = findExistingAnnotationRange(document, actualLine)
-                val existingText = existingRange?.let { document.getText(TextRange(it.first, it.second)) }
+            val lineText = currentLines.getOrNull(actualLine)
+            val existingRange = findExistingAnnotationRange(document, actualLine)
+            val existingText = existingRange?.let { document.getText(TextRange(it.first, it.second)) }
 
-                val anchorLine = existingRange?.let { document.getLineNumber(it.first) } ?: actualLine
-                val docBlock = when (t.kind) {
-                    // property 仍支持把 `--- 说明` 合并进字段注释
-                    "property" -> findLeadingTripleDashDocBlock(currentLines, anchorLine)
-                    // method 不再处理 `--- 说明`
-                    else -> null
-                }
+            val anchorLine = existingRange?.let { document.getLineNumber(it.first) } ?: actualLine
+            val docBlock = when (t.kind) {
+                // property 仍支持把 `--- 说明` 合并进字段注释
+                "property" -> findLeadingTripleDashDocBlock(currentLines, anchorLine)
+                // method 不再处理 `--- 说明`
+                else -> null
+            }
 
-                val annotation = when (t.kind) {
-                    "method" -> if (lineText != null) getAnnotationForMethod(lineText, actualLine, document.text, existingText, null) else ""
-                    "property" -> getAnnotationForProperty(actualLine, document.text, existingText, docBlock?.text)
-                    "classHeader" -> if (lineText != null) getAnnotationForClassHeader(actualLine, lineText, document.text, virtualFile) else ""
-                    else -> ""
-                }
-                if (annotation.isBlank()) continue
+            val annotation = when (t.kind) {
+                "method" -> if (lineText != null) getAnnotationForMethod(lineText, actualLine, document.text, existingText, null) else ""
+                "property" -> getAnnotationForProperty(actualLine, document.text, existingText, docBlock?.text)
+                "classHeader" -> if (lineText != null) getAnnotationForClassHeader(actualLine, lineText, document.text, virtualFile) else ""
+                else -> ""
+            }
+            if (annotation.isBlank()) continue
 
-                var startOffset = existingRange?.first ?: document.getLineStartOffset(actualLine)
-                var endOffset = existingRange?.second ?: startOffset
+            var startOffset = existingRange?.first ?: document.getLineStartOffset(actualLine)
+            var endOffset = existingRange?.second ?: startOffset
 
-                docBlock?.let {
-                    val docStartOffset = document.getLineStartOffset(it.startLine)
-                    val docEndOffset = document.getLineEndOffset(it.endLine) + 1
-                    if (docEndOffset <= startOffset) {
-                        startOffset = docStartOffset
-                        if (existingRange == null) {
-                            endOffset = docEndOffset
-                        }
+            docBlock?.let {
+                val docStartOffset = document.getLineStartOffset(it.startLine)
+                val docEndOffset = document.getLineEndOffset(it.endLine) + 1
+                if (docEndOffset <= startOffset) {
+                    startOffset = docStartOffset
+                    if (existingRange == null) {
+                        endOffset = docEndOffset
                     }
-                }
-
-                document.replaceString(startOffset, endOffset, annotation + "\n")
-
-                // 特殊处理：ViewBase.OnShow(params) 插入方法体内的 params class 声明（不重复插入）
-                if (t.kind == "method") {
-                    val newLine = findMethodLine(document.text.lines(), t.name, actualLine)
-                    if (newLine != -1) {
-                        ensureViewBaseOnShowParamsDecl(document, newLine)
-                    }
-                }
-
-                when (t.kind) {
-                    "method" -> if (existingRange != null) refreshedMethods++ else generatedMethods++
-                    "property" -> if (existingRange != null) refreshedProps++ else generatedProps++
-                    "classHeader" -> if (existingRange != null) refreshedHeader++ else generatedHeader++
                 }
             }
 
+            document.replaceString(startOffset, endOffset, annotation + "\n")
+
+            // 特殊处理：ViewBase.OnShow(params) 插入方法体内的 params class 声明（不重复插入）
+            if (t.kind == "method") {
+                val newLine = findMethodLine(document.text.lines(), t.name, actualLine)
+                if (newLine != -1) {
+                    ensureViewBaseOnShowParamsDecl(document, newLine)
+                }
+            }
+
+            when (t.kind) {
+                "method" -> if (existingRange != null) stats.refreshedMethods++ else stats.generatedMethods++
+                "property" -> if (existingRange != null) stats.refreshedProps++ else stats.generatedProps++
+                "classHeader" -> if (existingRange != null) stats.refreshedHeader++ else stats.generatedHeader++
+            }
+        }
+
+        fun removeGeneratedSuperTypeHintIfExists() {
+            val lines = document.text.lines()
+            val classEndLine = findClassEndLine(lines, classLine).coerceAtMost(lines.lastIndex)
+
+            var i = classLine + 1
+            while (i <= classEndLine && i < lines.size) {
+                val t = lines[i].trim()
+                if (t.startsWith("---@type ")) {
+                    val next = if (i + 1 < lines.size) lines[i + 1].trim() else ""
+                    val isSuper = next == "local super = super --'hack-code-remove'"
+                    if (isSuper) {
+                        val startOffset = document.getLineStartOffset(i)
+                        val endOffset = document.getLineEndOffset(i + 1) + 1
+                        document.deleteString(startOffset, endOffset)
+                        // 文档变化，重新同步并回退一行
+                        i--
+                        continue
+                    }
+                }
+                i++
+            }
+        }
+
+        val inheritInfo = PloopParser.findInheritClassWithLine(document.text, classLine)
+        if (ENABLE_SUPER_TYPE_HINT) {
             // 如果 class 继承了基类，插入 super 的类型提示（仅当不存在时）
-            val inheritInfo = PloopParser.findInheritClassWithLine(document.text, classLine)
             inheritInfo?.let { (parentName, inheritLine) ->
                 val lines = document.text.lines()
                 if (inheritLine in lines.indices) {
@@ -773,44 +846,116 @@ object AnnotationGenerator {
 
             // 如果当前 class 没有 inherit，则移除之前生成的 super 类型提示
             if (inheritInfo == null) {
-                val lines = document.text.lines()
-                val classEndLine = findClassEndLine(lines, classLine).coerceAtMost(lines.lastIndex)
+                removeGeneratedSuperTypeHintIfExists()
+            }
+        } else {
+            // 临时屏蔽：不生成，同时把历史生成过的那两行删掉（避免反复出现）。
+            removeGeneratedSuperTypeHintIfExists()
+        }
 
-                var i = classLine + 1
-                while (i <= classEndLine && i < lines.size) {
-                    val t = lines[i].trim()
-                    if (t.startsWith("---@type ")) {
-                        val next = if (i + 1 < lines.size) lines[i + 1].trim() else ""
-                        val isSuper = next == "local super = super --'hack-code-remove'"
-                        if (isSuper) {
-                            val startOffset = document.getLineStartOffset(i)
-                            val endOffset = document.getLineEndOffset(i + 1) + 1
-                            document.deleteString(startOffset, endOffset)
-                            // 文档变化，重新同步并回退一行
-                            i--
-                            continue
-                        }
-                    }
-                    i++
+        return stats
+    }
+
+    fun generateAnnotationsForClass(
+        e: AnActionEvent,
+        document: Document,
+        classLine: Int,
+        classLineText: String,
+        virtualFile: VirtualFile?,
+        showSummaryDialog: Boolean = true
+    ): GenerationStats {
+        val project = e.project ?: return GenerationStats()
+        var stats = GenerationStats()
+        WriteCommandAction.runWriteCommandAction(project) {
+            stats = generateAnnotationsForClassInWriteContext(project, document, classLine, classLineText, virtualFile)
+        }
+
+        if (showSummaryDialog) {
+            Messages.showInfoMessage(project, stats.toSummaryMessage(), "完成")
+        }
+
+        return stats
+    }
+
+    internal fun generateAnnotationsForFileInWriteContext(
+        project: com.intellij.openapi.project.Project,
+        document: Document,
+        virtualFile: VirtualFile?
+    ): GenerationStats {
+        val stats = GenerationStats()
+        val lines = document.text.lines()
+        if (lines.isEmpty()) return stats
+
+        data class Target(val kind: String, val name: String, val lineNumber: Int)
+
+        val targets = buildList {
+            for (i in lines.indices) {
+                val line = lines[i]
+                if (PloopParser.isClassDefinitionLine(line)) {
+                    val className = PloopParser.parseClassNameFromLine(line) ?: continue
+                    add(Target("class", className, i))
+                }
+                if (PloopParser.isEnumDefinitionLine(line)) {
+                    val enumName = PloopParser.parseEnumNameFromLine(line) ?: continue
+                    add(Target("enum", enumName, i))
+                }
+            }
+        }.sortedByDescending { it.lineNumber }
+
+        fun findClassLine(linesNow: List<String>, name: String, hintLine: Int): Int {
+            val pattern = Regex("""\bclass\s+[\"']$name[\"']""")
+            if (hintLine in linesNow.indices && pattern.containsMatchIn(linesNow[hintLine])) return hintLine
+            for (offset in 1..120) {
+                val down = hintLine + offset
+                if (down in linesNow.indices && pattern.containsMatchIn(linesNow[down])) return down
+                val up = hintLine - offset
+                if (up in linesNow.indices && pattern.containsMatchIn(linesNow[up])) return up
+            }
+            return -1
+        }
+
+        fun findEnumLine(linesNow: List<String>, name: String, hintLine: Int): Int {
+            val pattern = Regex("""^\s*enum\s+[\"']$name[\"']""")
+            if (hintLine in linesNow.indices && pattern.containsMatchIn(linesNow[hintLine])) return hintLine
+            for (offset in 1..120) {
+                val down = hintLine + offset
+                if (down in linesNow.indices && pattern.containsMatchIn(linesNow[down])) return down
+                val up = hintLine - offset
+                if (up in linesNow.indices && pattern.containsMatchIn(linesNow[up])) return up
+            }
+            return -1
+        }
+
+        for (t in targets) {
+            val currentLines = document.text.lines()
+
+            when (t.kind) {
+                "class" -> {
+                    val cl = findClassLine(currentLines, t.name, t.lineNumber)
+                    if (cl == -1) continue
+                    val classLineText = currentLines.getOrNull(cl) ?: continue
+                    stats.mergeFrom(generateAnnotationsForClassInWriteContext(project, document, cl, classLineText, virtualFile))
+                }
+
+                "enum" -> {
+                    val el = findEnumLine(currentLines, t.name, t.lineNumber)
+                    if (el == -1) continue
+
+                    val annotation = getAnnotationForEnum(el, document.text)
+                    if (annotation.isBlank()) continue
+
+                    val existingRange = findExistingAnnotationRange(document, el)
+                    val startOffset = existingRange?.first ?: document.getLineStartOffset(el)
+                    val endOffset = existingRange?.second ?: startOffset
+
+                    document.replaceString(startOffset, endOffset, annotation + "\n")
+
+                    if (existingRange != null) stats.refreshedEnums++ else stats.generatedEnums++
                 }
             }
         }
 
-        val msg = buildString {
-            if (generatedHeader > 0 || refreshedHeader > 0) {
-                append("类注释: 新增 $generatedHeader，刷新 $refreshedHeader。 ")
-            }
-            if (generatedProps > 0 || refreshedProps > 0) {
-                append("属性: 新增 $generatedProps，刷新 $refreshedProps。 ")
-            }
-            if (generatedMethods > 0 || refreshedMethods > 0) {
-                append("方法: 新增 $generatedMethods，刷新 $refreshedMethods。")
-            }
-            if (isBlank()) {
-                append("没有需要处理的内容。")
-            }
-        }
-        Messages.showInfoMessage(project, msg.trim(), "完成")
+        return stats
     }
 
     /**

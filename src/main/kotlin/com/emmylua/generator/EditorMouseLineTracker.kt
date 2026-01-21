@@ -2,7 +2,6 @@ package com.emmylua.generator
 
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.event.EditorMouseEvent
-import com.intellij.openapi.editor.event.EditorMouseEventArea
 import com.intellij.openapi.editor.event.EditorMouseListener
 import com.intellij.openapi.editor.event.EditorMouseMotionListener
 import com.intellij.openapi.project.Project
@@ -30,9 +29,8 @@ class EditorMouseLineTracker : StartupActivity {
             val multicaster = EditorFactory.getInstance().eventMulticaster
 
             fun update(e: EditorMouseEvent) {
-                // 只记录编辑区（避免 gutter / 退出 editor 时把 line 覆盖成无意义的值）
-                if (e.area != EditorMouseEventArea.EDITING_AREA) return
-
+                // 右键有可能发生在 gutter/行号区；如果只记录 EDITING_AREA，会导致 action 拿不到正确行号。
+                // 这里统一根据鼠标坐标换算 logical line，只要 line >= 0 就记录。
                 val editor = e.editor
                 val point = e.mouseEvent.point
                 val logical = editor.xyToLogicalPosition(point)

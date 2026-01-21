@@ -73,7 +73,34 @@ class EmmyLuaAnnotationAction : AnAction() {
             return
         }
 
-        Messages.showInfoMessage(project, "请将光标放在 enum / class / property / function 定义行上。", "提示")
+        // 诊断信息：帮助排查右键菜单取到的行号是否正确
+        val caretLine = caretModel.logicalPosition.line
+        val caretText = runCatching {
+            val s = document.getLineStartOffset(caretLine.coerceIn(0, document.lineCount - 1))
+            val ed = document.getLineEndOffset(caretLine.coerceIn(0, document.lineCount - 1))
+            document.getText(com.intellij.openapi.util.TextRange(s, ed))
+        }.getOrNull()
+
+        val tracked = trackedMouseLine
+        val chosenLine = currentLine
+        val chosenText = currentLineText
+
+        val msg = buildString {
+            appendLine("请将光标放在 enum / class / property / function 定义行上。")
+            appendLine()
+            appendLine("File: ${virtualFile?.path ?: "(unknown)"}")
+            appendLine("document.lineCount=${document.lineCount}")
+            appendLine("trackedMouseLine=${tracked?.let { it + 1 } ?: "(null)"}")
+            appendLine("caretLine=${caretLine + 1}")
+            appendLine("chosenLine=${chosenLine + 1}")
+            appendLine()
+            appendLine("chosenLineText: ${chosenText.trimEnd()}")
+            if (caretText != null) {
+                appendLine("caretLineText: ${caretText.trimEnd()}")
+            }
+        }.trimEnd()
+
+        Messages.showInfoMessage(project, msg, "提示")
     }
     
 

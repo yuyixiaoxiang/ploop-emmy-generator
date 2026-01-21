@@ -55,8 +55,75 @@ object PloopParser {
     // 匹配 function MethodName(self, param1, param2)
     private val METHOD_PATTERN = Regex("""^\s*(local\s+)?function\s+(\w+)\s*\(([^)]*)\)""")
 
-    // 匹配 enum 内的条目：NAME = 1,  或 NAME,
-    private val ENUM_ENTRY_PATTERN = Regex("""^\s*(\w+)\s*(?:=\s*([^,}]+))?\s*,?\s*(?:--.*)?$""")
+    // enum 内条目解析：兼容
+    // 1) "NAME",  (字符串枚举)
+    // 2) NAME,     (无显式 value)
+    // 3) NAME = 1, (数字/表达式枚举)
+    // 且允许一行多个条目："A", "B", "C",
+    private fun parseEnumEntriesFromLine(rawLine: String): List<LuaEnumEntry> {
+        // 去掉行内注释
+        val codePart = rawLine.substringBefore("--")
+        if (codePart.isBlank()) return emptyList()
+
+        val parts = codePart.split(',')
+        if (parts.isEmpty()) return emptyList()
+
+        fun unquote(s: String): String {
+            val t = s.trim()
+            if (t.length >= 2 && ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith('\'') && t.endsWith('\'')))) {
+                return t.substring(1, t.length - 1)
+            }
+            return t
+        }
+
+        fun parseNameToken(token: String): Pair<String, Boolean>? {
+            val t = token.trim()
+            if (t.isEmpty()) return null
+
+            // 过滤掉 block 符号
+            if (t == "{" || t == "}") return null
+
+            val isQuoted = (t.startsWith('"') && t.contains('"')) || (t.startsWith('\'') && t.contains('\''))
+            return if (isQuoted) {
+                val name = unquote(t)
+                if (name.isBlank()) null else name to true
+            } else {
+                val m = Regex("""[A-Za-z_][A-Za-z0-9_]*""").find(t)
+                val name = m?.value
+                if (name.isNullOrBlank()) null else name to false
+            }
+        }
+
+        val result = mutableListOf<LuaEnumEntry>()
+        for (p in parts) {
+            val seg = p.trim()
+            if (seg.isEmpty()) continue
+
+            val (nameToken, valueExpr) = if (seg.contains('=')) {
+                val left = seg.substringBefore('=').trim()
+                val right = seg.substringAfter('=').trim().removeSuffix("}").trim()
+                left to right
+            } else {
+                seg to null
+            }
+
+            val parsed = parseNameToken(nameToken) ?: continue
+            val (name, isStringLiteral) = parsed
+
+            // 过滤掉可能误解析的 end
+            if (name == "end") continue
+
+            val expr = when {
+                valueExpr != null -> valueExpr.trim().removeSuffix(";")
+                isStringLiteral -> "\"$name\"" // 字符串枚举：让 inferTypeFromExpression 推断为 string
+                else -> null
+            }
+
+            result.add(LuaEnumEntry(name = name, valueExpr = expr))
+        }
+
+        return result
+    }
 
     /**
      * 检查当前行是否是 class 定义行
@@ -246,7 +313,7 @@ object PloopParser {
     /**
      * 从当前行向上查找 enum 定义（用于在枚举块内任意行右键也能生成）
      */
-    fun findEnumDefinitionAtOrAbove(documentText: String, currentLine: Int, searchLimit: Int = 80): Pair<Int, String>? {
+    fun findEnumDefinitionAtOrAbove(documentText: String, currentLine: Int, searchLimit: Int = 800): Pair<Int, String>? {
         val lines = documentText.lines()
         if (lines.isEmpty()) return null
 
@@ -283,15 +350,9 @@ object PloopParser {
             if (trimmed.isEmpty()) continue
             if (trimmed.startsWith("--")) continue
 
-            ENUM_ENTRY_PATTERN.find(raw)?.let { match ->
-                val name = match.groupValues[1]
-                val valueExpr = match.groupValues.getOrNull(2)?.trim()?.takeIf { it.isNotEmpty() }
-
-                // 过滤掉可能误匹配的 "end" / "}" 等
-                if (name == "end") return@let
-                if (name == "}" || name == "{") return@let
-
-                entries.add(LuaEnumEntry(name, valueExpr))
+            val parsed = parseEnumEntriesFromLine(raw)
+            if (parsed.isNotEmpty()) {
+                entries.addAll(parsed)
             }
         }
 

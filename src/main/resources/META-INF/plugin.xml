@@ -83,6 +83,15 @@
                 description="将当前Data类注册到GameData._LAZY_REQUIRE，并同步写入GameData/init.lua（不重复）">
             <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="EmmyLuaAnnotationGenerator.RegisterModuleClass"/>
         </action>
+
+        <!-- Project视图：批量为选中的Lua文件/文件夹生成注释（放到最外层菜单） -->
+        <action id="EmmyLuaAnnotationGenerator.BatchGenerateAnnotations"
+                class="com.emmylua.generator.BatchGenerateAnnotationsForSelectionAction"
+                text="[LUA]选中Lua文件增加注释"
+                description="在Project视图中，对选中的Lua文件/文件夹批量生成/刷新EmmyLua注释">
+            <!-- 尝试放在 Compare With... 后面（通常在最外层，而不是 Tools 子菜单里） -->
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="after" relative-to-action="CompareWith"/>
+        </action>
         
         <!-- 示例：新增一个清除注释的菜单 -->
         <!--
